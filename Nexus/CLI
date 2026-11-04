@@ -1,0 +1,194 @@
+"""
+NEXUS CLI — Interface de Comando Interativa.
+Permite ao operador enviar comandos, verificar status e gerenciar o sistema.
+"""
+
+import asyncio
+import json
+import sys
+from typing import Optional, Dict, Any
+from rich.console import Console
+from rich.table import Table
+from rich.panel import Panel
+from rich.markdown import Markdown
+
+from .core import NexusCore
+from .bank import NexusBank
+from .runtime import NexusRuntime
+
+class NexusCLI:
+    """
+    CLI interativa para o NEXUS.
+    """
+    
+    def __init__(self, runtime: NexusRuntime):
+        self._runtime = runtime
+        self._core = runtime._core
+        self._bank = runtime._bank
+        self._console = Console()
+        
+        # Comandos disponíveis
+        self.commands = {
+            "status": self.cmd_status,
+            "balance": self.cmd_balance,
+            "agents": self.cmd_agents,
+            "audit": self.cmd_audit,
+            "memory": self.cmd_memory,
+            "command": self.cmd_command,
+            "backup": self.cmd_backup,
+            "help": self.cmd_help,
+            "quit": self.cmd_quit
+        }
+        
+    async def start(self):
+        """Inicia o loop interativo da CLI."""
+        self._console.print(Panel("[bold cyan]NEXUS CONTROL TERMINAL[/bold cyan]", subtitle="Digite 'help' para ver comandos disponíveis"))
+        
+        while True:
+            try:
+                user_input = await asyncio.to_thread(input, "\nnexus> ")
+                if not user_input:
+                    continue
+                    
+                parts = user_input.split(maxsplit=1)
+                command = parts[0].lower()
+                args = parts[1] if len(parts) > 1 else ""
+                
+                if command in self.commands:
+                    await self.commands[command](args)
+                else:
+                    self._console.print(f"[red]Comando desconhecido:[/red] {command}")
+                    self._console.print("[yellow]Digite 'help' para ver comandos disponíveis.[/yellow]")
+                    
+            except KeyboardInterrupt:
+                self._console.print("\n[yellow]Saindo da CLI...[/yellow]")
+                break
+            except Exception as e:
+                self._console.print(f"[red]Erro:[/red] {e}")
+
+    async def cmd_status(self, args: str):
+        """Exibe o status do sistema."""
+        status = {
+            "balance": self._bank.get_balance(),
+            "total_operations": self._runtime._stats["total_operations"],
+            "errors": self._runtime._stats["errors"],
+            "tokens_mined": self._runtime._stats["tokens_mined"],
+            "learning_rate": self._core.get_memory("learning_rate", 0.05)
+        }
+        
+        table = Table(title="Status do NEXUS", show_header=True, header_style="bold cyan")
+        table.add_column("Métrica", style="cyan")
+        table.add_column("Valor", style="green")
+        
+        for key, value in status.items():
+            table.add_row(key, f"{value:.2f}" if isinstance(value, float) else str(value))
+        
+        self._console.print(table)
+
+    async def cmd_balance(self, args: str):
+        """Exibe o saldo atual."""
+        balance = self._bank.get_balance()
+        self._console.print(Panel(f"[bold green]Saldo Atual:[/bold green] [bold white]{balance:.2f} NC[/bold white]"))
+
+    async def cmd_agents(self, args: str):
+        """Exibe a lista de agentes."""
+        table = Table(title="Agentes NEXUS", show_header=True, header_style="bold cyan")
+        table.add_column("ID", style="cyan")
+        table.add_column("Capacidades", style="white")
+        
+        for agent_id, caps in self._core._agent_caps.items():
+            table.add_row(agent_id, ", ".join(caps))
+            
+        self._console.print(table)
+
+    async def cmd_audit(self, args: str):
+        """Exibe os últimos eventos de auditoria."""
+        limit = int(args) if args.isdigit() else 10
+        entries = self._bank.get_audit_entries(limit)
+        
+        table = Table(title=f"Últimos {limit} Eventos de Auditoria", show_header=True, header_style="bold cyan")
+        table.add_column("ID", style="cyan", width=20)
+        table.add_column("Operação", style="white", width=15)
+        table.add_column("Evento", style="yellow")
+        table.add_column("Metadados", style="dim")
+        
+        for entry in entries:
+            table.add_row(
+                entry["entry_id"],
+                entry["operation_id"],
+                entry["event_type"],
+                json.dumps(entry["metadata"])[:50]
+            )
+            
+        self._console.print(table)
+
+    async def cmd_memory(self, args: str):
+        """Exibe a memória persistente."""
+        memory = self._core.get_all_memory()
+        
+        table = Table(title="Memória Persistente", show_header=True, header_style="bold cyan")
+        table.add_column("Chave", style="cyan")
+        table.add_column("Valor", style="white")
+        
+        for key, value in memory.items():
+            table.add_row(key, str(value)[:50])
+            
+        self._console.print(table)
+
+    async def cmd_command(self, args: str):
+        """Envia um comando para um agente."""
+        # Formato: command AGENT_ID "request"
+        parts = args.split(maxsplit=1)
+        if len(parts) < 2:
+            self._console.print("[red]Uso:[/red] command AGENT_ID \"request\"")
+            return
+            
+        agent_id = parts[0].upper()
+        request = parts[1].strip('"')
+        
+        self._console.print(f"[cyan]Enviando comando para {agent_id}...[/cyan]")
+        
+        task = self._core.submit_task({
+            "request": request,
+            "agents": [agent_id],
+            "capabilities": self._core._agent_caps.get(agent_id, [])
+        })
+        
+        responses = await self._core.dispatch_task(task.task_id)
+        response = responses[0] if responses else {"error": "Sem resposta"}
+        
+        # Formata a resposta
+        self._console.print(Panel(
+            f"[bold]{agent_id}:[/bold] {response.get('summary', 'N/A')}\n"
+            f"[dim]Status: {response.get('status')}[/dim]\n"
+            f"[dim]Dados: {json.dumps(response.get('data', {}), indent=2)[:500]}[/dim]"
+        ))
+
+    async def cmd_backup(self, args: str):
+        """Cria um backup manual."""
+        self._console.print("[cyan]Criando backup...[/cyan]")
+        backup_path = self._bank.backup_database()
+        self._console.print(f"[green]Backup criado:[/green] {backup_path}")
+        self._core.set_memory("last_backup_time", time.time())
+
+    async def cmd_help(self, args: str):
+        """Exibe a ajuda."""
+        help_text = """
+[bold cyan]Comandos Disponíveis:[/bold cyan]
+
+[bold]status[/bold]                - Exibe o status do sistema
+[bold]balance[/bold]               - Exibe o saldo atual
+[bold]agents[/bold]                - Exibe a lista de agentes
+[bold]audit [N][/bold]              - Exibe os últimos N eventos de auditoria (padrão: 10)
+[bold]memory[/bold]                - Exibe a memória persistente
+[bold]command AGENT "req"[/bold]   - Envia um comando para um agente
+[bold]backup[/bold]                - Cria um backup manual
+[bold]help[/bold]                  - Exibe esta ajuda
+[bold]quit[/bold]                  - Sai da CLI
+        """
+        self._console.print(Markdown(help_text))
+
+    async def cmd_quit(self, args: str):
+        """Sai da CLI."""
+        self._console.print("[yellow]Saindo da CLI...[/yellow]")
+        sys.exit(0)
