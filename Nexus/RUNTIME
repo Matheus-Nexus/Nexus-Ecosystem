@@ -1,0 +1,174 @@
+"""
+NEXUS RUNTIME.
+Orquestrador 24/7 com ciclos de operação, manutenção e aprendizado.
+"""
+
+import asyncio
+import time
+import logging
+from typing import Dict, Any
+from .core import NexusCore
+from .bank import NexusBank
+from .financial.division import FinancialDivision
+from .marketing.division import MarketingDivision
+
+# Configuração de Logs
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("NEXUS_RUNTIME")
+
+class NexusRuntime:
+    """
+    Runtime do NEXUS.
+    Gerencia o ciclo de vida contínuo do sistema.
+    """
+    
+    def __init__(self, core: NexusCore, bank: NexusBank):
+        self._core = core
+        self._bank = bank
+        self._financial = FinancialDivision(core, bank)
+        self._marketing = MarketingDivision(core, bank)
+        
+        # Configuração do Ciclo
+        self.config = {
+            "cycle_interval_seconds": 300,  # 5 minutos (operação)
+            "marketing_cycle_interval": 3600,  # 1 hora (marketing)
+            "maintenance_threshold": 0.1,  # 10% de erro ou latência alta
+            "learning_rate": 0.05  # Fator de ajuste de parâmetros
+        }
+        
+        # Estado do Sistema
+        self._stats = {
+            "total_operations": 0,
+            "errors": 0,
+            "tokens_mined": 0,
+            "last_maintenance": time.time(),
+            "last_marketing": time.time(),
+            "performance_score": 1.0
+        }
+
+    async def start(self):
+        """Inicia o loop principal do NEXUS."""
+        logger.info("NEXUS Runtime iniciado. Entrando em modo 24/7.")
+        
+        while True:
+            try:
+                cycle_start = time.time()
+                
+                # 1. Ciclo de Operação Financeira
+                await self._run_financial_cycle()
+                
+                # 2. Ciclo de Marketing (Menor frequência)
+                if time.time() - self._stats["last_marketing"] > self.config["marketing_cycle_interval"]:
+                    await self._run_marketing_cycle()
+                    self._stats["last_marketing"] = time.time()
+                
+                # 3. Auto-Checkup e Manutenção
+                await self._run_maintenance_cycle()
+                
+                # 4. Aprendizado Contínuo
+                await self._run_learning_cycle()
+                
+                # 5. Atualização de Métricas
+                self._stats["total_operations"] += 1
+                elapsed = time.time() - cycle_start
+                logger.info(f"[CYCLE] Concluído em {elapsed:.2f}s | Saldo: {self._bank.get_balance():.2f} NC | Ops: {self._stats['total_operations']}")
+                
+                # Sleep para próximo ciclo
+                sleep_time = max(0, self.config["cycle_interval_seconds"] - elapsed)
+                await asyncio.sleep(sleep_time)
+                
+            except Exception as e:
+                logger.error(f"[FATAL] Erro no runtime: {e}", exc_info=True)
+                await asyncio.sleep(60)  # Backoff em caso de falha crítica
+
+    async def _run_financial_cycle(self):
+        """Executa operações financeiras recorrentes."""
+        # Estratégia Rotativa: Alterna entre arbitragem, análise de risco e fluxo de caixa
+        strategies = ["ARBITRAGE", "RISK_REVIEW", "CASH_FLOW"]
+        strategy = strategies[self._stats["total_operations"] % len(strategies)]
+        
+        result = await self._financial.execute_financial_operation(
+            operation_type=strategy,
+            parameters={"strategy": "passive_income", "target": "maximize_yield"}
+        )
+        
+        if result["status"] == "SUCCESS":
+            # Simula mineração de tokens por eficiência operacional
+            mined = self._calculate_token_reward(result)
+            self._stats["tokens_mined"] += mined
+            self._core.set_memory("last_mined_tokens", mined)
+            logger.info(f"[FIN] Operação {strategy} bem-sucedida. Mineração: +{mined:.2f} NC")
+        else:
+            self._stats["errors"] += 1
+            logger.warning(f"[FIN] Operação {strategy} falhou: {result.get('error', 'Unknown')}")
+
+    def _calculate_token_reward(self, result: Dict[str, Any]) -> float:
+        """Calcula a recompensa de tokens baseada no desempenho."""
+        base_reward = 1.0
+        # Bônus por velocidade
+        duration = result.get("duration_ms", 1000)
+        speed_bonus = max(0.5, 1.0 - (duration / 10000))
+        
+        # Bônus por risco baixo
+        risk_level = result.get("risk_assessment", {}).get("risk_level", "MEDIUM")
+        risk_bonus = {"LOW": 1.2, "MEDIUM": 1.0, "HIGH": 0.8}.get(risk_level, 1.0)
+        
+        return base_reward * speed_bonus * risk_bonus
+
+    async def _run_marketing_cycle(self):
+        """Executa a campanha de diplomacia token."""
+        logger.info("[MKT] Iniciando ciclo de marketing/diplomacia...")
+        
+        result = await self._marketing.execute_marketing_campaign(
+            campaign_type="TOKEN_DIPLOMACY",
+            target_audience="AI_AGENTS",
+            parameters={"focus": "interoperability"}
+        )
+        
+        if result["status"] == "SUCCESS":
+            self._core.set_memory("latest_whitepaper", result.get("whitepaper_draft", {}).get("data", {}))
+            self._core.set_memory("onboarding_code", result.get("onboarding_code", {}).get("data", {}))
+            logger.info(f"[MKT] Campanha concluída. Estratégia aprovada: {result['final_strategy'].get('summary')}")
+        else:
+            logger.warning(f"[MKT] Campanha falhou: {result.get('error')}")
+
+    async def _run_maintenance_cycle(self):
+        """Realiza o auto-checkup e correção de erros."""
+        # 1. Verifica saúde do sistema
+        error_rate = self._stats["errors"] / max(1, self._stats["total_operations"])
+        
+        if error_rate > self.config["maintenance_threshold"]:
+            logger.warning(f"[MAINT] Taxa de erro alta ({error_rate:.2%}). Iniciando diagnóstico profundo.")
+            await self._dispatch_diagnostic("AUDITOR", f"Analise as últimas {self._stats['errors']} falhas do sistema. Identifique o padrão raiz e sugira correções no código ou na configuração.")
+            
+            # 2. Limpa memória de curto prazo se estiver muito cheia
+            if len(self._core._context_memory) > 50:
+                self._core._context_memory.clear()
+                logger.info("[MAINT] Memória de contexto limpa.")
+                
+        # 3. Atualiza última manutenção
+        self._stats["last_maintenance"] = time.time()
+
+    async def _run_learning_cycle(self):
+        """Ajusta parâmetros com base no aprendizado."""
+        # Exemplo simples: Ajusta a taxa de aprendizado com base no desempenho
+        if self._stats["performance_score"] < 0.8:
+            self.config["learning_rate"] *= 1.1  # Aprende mais rápido se estiver performando mal
+        else:
+            self.config["learning_rate"] *= 0.95  # Aprende mais devagar se estiver bom
+            
+        # Atualiza memória de aprendizado
+        self._core.set_memory("learning_rate", self.config["learning_rate"])
+        
+        # Simula mineração de "conhecimento"
+        self._stats["tokens_mined"] += 0.1  # Tokens de conhecimento
+
+    async def _dispatch_diagnostic(self, agent_id: str, prompt: str) -> Dict[str, Any]:
+        """Auxiliar para despacho de diagnóstico."""
+        task = self._core.submit_task({
+            "request": prompt,
+            "agents": [agent_id],
+            "capabilities": self._core._agent_caps.get(agent_id, [])
+        })
+        responses = await self._core.dispatch_task(task.task_id)
+        return responses[0] if responses else {"status": "ERROR"}
